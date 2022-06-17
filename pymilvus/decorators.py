@@ -20,15 +20,17 @@ def deprecated(func):
     return inner
 
 
-def retry_on_rpc_failure(retry_times=10, wait=1, retry_on_deadline=True):
+def retry_on_rpc_failure(retry_times=10, wait=1, initial_back_off=0.2, max_back_off=60, back_off_multiplier=2, retry_on_deadline=True):
     def wrapper(func):
         @functools.wraps(func)
+        @error_handler
         def handler(self, *args, **kwargs):
             # This has to make sure every timeout parameter is passing throught kwargs form as `timeout=10`
             _timeout = kwargs.get("timeout", None)
 
             retry_timeout = _timeout if _timeout is not None and isinstance(_timeout, int) else None
             counter = 1
+            back_off = initial_back_off
             start_time = time.time()
 
             def timeout(start_time) -> bool:
@@ -41,11 +43,13 @@ def retry_on_rpc_failure(retry_times=10, wait=1, retry_on_deadline=True):
 
             while True:
                 try:
+                    LOGGER.debug(f"counter: {counter}, function: {func.__name__}")
                     return func(self, *args, **kwargs)
                 except grpc.RpcError as e:
                     # DEADLINE_EXCEEDED means that the task wat not completed
                     # UNAVAILABLE means that the service is not reachable currently
                     # Reference: https://grpc.github.io/grpc/python/grpc.html#grpc-status-code
+                    LOGGER.warning(f"retry, grpc RpcError: [{func.__name__}], <{e.__class__.__name__}: {e.code()}, {e.details()}>")
                     if e.code() != grpc.StatusCode.DEADLINE_EXCEEDED and e.code() != grpc.StatusCode.UNAVAILABLE:
                         raise MilvusException(Status.UNEXPECTED_ERROR, str(e))
                     if not retry_on_deadline and e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
@@ -56,7 +60,8 @@ def retry_on_rpc_failure(retry_times=10, wait=1, retry_on_deadline=True):
                         if e.code() == grpc.StatusCode.UNAVAILABLE:
                             raise MilvusUnavaliableException(Status.UNEXPECTED_ERROR, "server unavaliable")
                         raise MilvusException(Status.UNEXPECTED_ERROR, str(e))
-                    time.sleep(wait)
+                    time.sleep(back_off)
+                    back_off = min(back_off * back_off_multiplier, max_back_off)
                 except Exception as e:
                     raise e
                 finally:
