@@ -120,19 +120,32 @@ class GrpcHandler:
     def _setup_grpc_channel(self):
         """ Create a ddl grpc channel """
         if self._channel is None:
+            service_config_json = """
+            {
+            "methodConfig": [{
+              "name": [{}],
+              "waitForReady": false,
+              "retryPolicy": {
+                  "maxAttempts": 4,
+                  "initialBackoff": ".1s",
+                  "maxBackoff": ".4s",
+                  "backoffMultiplier": 1.6,
+                  "retryableStatusCodes": [ "UNAVAILABLE" ]
+              }
+            }]
+            }"""
+            opts = [(cygrpc.ChannelArgKey.max_send_message_length, -1),
+                    (cygrpc.ChannelArgKey.max_receive_message_length, -1),
+                    ('grpc.enable_retries', 1),
+                    ("grpc.service_config", service_config_json),
+                    ('grpc.keepalive_time_ms', 55000),
+                    ]
             if not self._secure:
                 self._channel = grpc.insecure_channel(
                     self._uri,
-                    options=[(cygrpc.ChannelArgKey.max_send_message_length, -1),
-                             (cygrpc.ChannelArgKey.max_receive_message_length, -1),
-                             ('grpc.enable_retries', 1),
-                             ('grpc.keepalive_time_ms', 55000)]
+                    options=opts,
                 )
             else:
-                opts = [(cygrpc.ChannelArgKey.max_send_message_length, -1),
-                        (cygrpc.ChannelArgKey.max_receive_message_length, -1),
-                        ('grpc.enable_retries', 1),
-                        ('grpc.keepalive_time_ms', 55000)]
                 if self._client_pem_path != "" and self._client_key_path != "" and self._ca_pem_path != "" \
                         and self._server_name != "":
                     opts.append(('grpc.ssl_target_name_override', self._server_name, ),)
